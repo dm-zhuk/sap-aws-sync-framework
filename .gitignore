@@ -1,0 +1,34 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.ipynb_checkpoints/
+
+# --- Security ---
+.env
+.venv
+*.pem
+*.key
+
+# --- Spark / Data Lake ---
+spark-warehouse/
+checkpoint/
+derby.log
+metastore_db/
+
+# --- Docker ---
+.docker/
+.env.docker
+
+# --- Terraform ---
+.terraform/
+*.tfstate
+*.tfstate.backup
+
+# --- OS / IDE ---
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.log
