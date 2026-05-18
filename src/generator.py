@@ -5,17 +5,22 @@ import signal
 import argparse
 import logging
 import psycopg2
-from contextlib import contextmanager
-from pathlib import Path
-from faker import Faker
-from dotenv import load_dotenv
 
+from dotenv import load_dotenv
+from faker import Faker
+from pathlib import Path
+
+from schemas import DDL_COMMANDS, generate_sap_records
+from kafka_streamer import send_sap_event
+
+# Configure console logging outputs
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 
+# Path resolution to catch up .env credentials
 script_dir = Path(__file__).resolve().parent
 root_dir = script_dir.parent
 dotenv_path = root_dir / ".env"
@@ -27,152 +32,126 @@ running = True
 
 
 def handle_signal(signum, frame):
+    """To catch terminal shutdown signals (like Ctrl/C)."""
     global running
-    logging.info(f"Signal {signum} received. Safe shutdown initiated...")
+    logging.info(f"Signal {signum} received. Safely spinning down the engine..")
     running = False
 
 
-# Register system signal listeners
+# Register signal handlers to prevent terminal crashes
 signal.signal(signal.SIGINT, handle_signal)
 signal.signal(signal.SIGTERM, handle_signal)
 
 
-@contextmanager
-def get_db_connection():
+def get_raw_db_connection():
+    """Establishes connection to PostgreSQL sap-db."""
+    return psycopg2.connect(
+        host=os.getenv("SAP_DB_HOST", "localhost"),
+        port=os.getenv("SAP_DB_PORT", "5432"),
+        database=os.getenv("SAP_DB_NAME"),
+        user=os.getenv("SAP_DB_USER"),
+        password=os.getenv("SAP_DB_PASSWORD"),
+        connect_timeout=5,
+    )
+
+
+def init_sap_tables():
+    """Runs once at script startup to build DDL table structures."""
     conn = None
     try:
-        conn = psycopg2.connect(
-            host=os.getenv("SAP_DB_HOST", "localhost"),
-            port=os.getenv("SAP_DB_PORT", "5432"),
-            database=os.getenv("SAP_DB_NAME"),
-            user=os.getenv("SAP_DB_USER"),
-            password=os.getenv("SAP_DB_PASSWORD"),
-            connect_timeout=5,
-        )
-        yield conn
-    except psycopg2.Error as e:
-        logging.error(f"Database connection failure: {e}")
-        raise
+        conn = get_raw_db_connection()
+        cur = conn.cursor()
+        
+        # Loop through and execute the decoupled DDL commands
+        for command in DDL_COMMANDS:
+            cur.execute(command)
+            
+        conn.commit()
+        cur.close()
+        logging.info("[GHOST SAP] Tables MARA and VBAK verified successfully inside Postgres.")
+        
+    except Exception as e:
+        logging.critical(f"Failed to initialize database schema: {e}")
+        sys.exit(1)
     finally:
         if conn:
             conn.close()
 
 
-def init_sap_tables():
-    commands = (
-        """
-        CREATE TABLE IF NOT EXISTS mara (
-            matnr VARCHAR(18) PRIMARY KEY,
-            ersda TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            mtart VARCHAR(4),
-            matkl VARCHAR(9),
-            meins VARCHAR(3)
-        )
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS vbak (
-            vbeln SERIAL PRIMARY KEY,
-            erdat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            kunnr VARCHAR(10),
-            waerk VARCHAR(5),
-            netwr DECIMAL(15,2),
-            matnr VARCHAR(18) REFERENCES mara(matnr)
-        )
-        """,
-    )
-    try:
-        with get_db_connection() as conn:
-            with conn.cursor() as cur:
-                for command in commands:
-                    cur.execute(command)
-                conn.commit()
-        logging.info("[GHOST SAP] Tables MARA and VBAK verified successfully.")
-    except Exception as e:
-        logging.critical(f"Failed to initialize database schema: {e}")
-        sys.exit(1)
-
-
 def generate_job(max_records: int, duration: int, delay: float):
-    """Simulates real-time transactions with strict safety boundaries."""
+    """
+    Execution loop - injects relational mock records into 
+    Postgres and immediately streams copies into Kafka topics.
+    """
     global running
     records_count = 0
     start_time = time.time()
 
     logging.info(
-        f"Starting simulation. Limits -> Max Records: {max_records if max_records > 0 else 'Uncapped'}, "
-        f"Duration: {duration if duration > 0 else 'Uncapped'}s"
+        f"Starting simulation. Constraints -> Max Records: {max_records if max_records > 0 else 'Uncapped'}, "
+        f"Duration: {duration if duration > 0 else 'Uncapped'}s, Pacing: {delay}s"
     )
 
-    # Keep connection out of the loop
+    conn = None
     try:
-        with get_db_connection() as conn:
-            with conn.cursor() as cur:
-                while running:
-                    # Condition 1: Check record limit boundary
-                    if max_records > 0 and records_count >= max_records:
-                        logging.info(
-                            f"Reached specified target threshold of {max_records} records."
-                        )
-                        break
+        # Establish a single, robust database session connection for the loop
+        conn = get_raw_db_connection()
+        cur = conn.cursor()
 
-                    # Condition 2: Check execution time boundary
-                    if duration > 0 and (time.time() - start_time) >= duration:
-                        logging.info(
-                            f"Execution timeframe of {duration} seconds reached."
-                        )
-                        break
+        while running:
+            # CHECKUP 1: stops if target count reached
+            if max_records > 0 and records_count >= max_records:
+                logging.info(f"Target threshold of {max_records} records successfully processed.")
+                break
 
-                    try:
-                        mat_id = f"MAT-{fake.random_int(min=1000, max=9999)}"
+            # CHECKUP 2: stops if the allowed running time expires (in seconds)
+            if duration > 0 and (time.time() - start_time) >= duration:
+                logging.info(f"Execution timeframe restriction of {duration} seconds reached.")
+                break
 
-                        # 1. Create a new material (MARA)
-                        cur.execute(
-                            "INSERT INTO mara (matnr, mtart, matkl, meins) VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
-                            (
-                                mat_id,
-                                fake.lexify(text="????").upper(),
-                                fake.numerify(text="###"),
-                                "PC",
-                            ),
-                        )
+            try:
+                # Use the schemas factory to build a synced set of data elements
+                mat_id, db_mara, db_vbak, kafka_mara, kafka_vbak = generate_sap_records(fake)
 
-                        # 2. Create a linked Sales Order (VBAK)
-                        cur.execute(
-                            "INSERT INTO vbak (kunnr, waerk, netwr, matnr) VALUES (%s, %s, %s, %s)",
-                            (
-                                fake.numerify(text="0000######"),
-                                "EUR",
-                                fake.pydecimal(
-                                    left_digits=5, right_digits=2, positive=True
-                                ),
-                                mat_id,
-                            ),
-                        )
+                # PHASE A: WRITE TO DB CORE
+                cur.execute(
+                    "INSERT INTO mara (matnr, mtart, matkl, meins) VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
+                    db_mara
+                )
+                cur.execute(
+                    "INSERT INTO vbak (kunnr, waerk, netwr, matnr) VALUES (%s, %s, %s, %s)",
+                    db_vbak
+                )
+                
+                # Commit to ensure persistence is complete
+                conn.commit()
+                records_count += 1
+                logging.info(f"[DB COMMIT #{records_count}] Saved data state for {mat_id}")
 
-                        conn.commit()
-                        records_count += 1
-                        logging.info(
-                            f"[TRANSACTION #{records_count}] Sales Order processed for {mat_id}"
-                        )
+                # PHASE B: EVENT INGESTION LAYER (Apache Kafka)
+                # Runs only if Phase A succeeded.
+                send_sap_event(topic="sap.mara", key=mat_id, payload=kafka_mara)
+                send_sap_event(topic="sap.vbak", key=mat_id, payload=kafka_vbak)
 
-                    except psycopg2.DatabaseError as db_err:
-                        logging.error(
-                            f"Transaction failed, rolling back step. Error: {db_err}"
-                        )
-                        conn.rollback()
+            except psycopg2.DatabaseError as db_err:
+                logging.error(f"Database write failed. Rolling back transaction step. Error: {db_err}")
+                conn.rollback()
 
-                    # Safe interval sleep, manageable
-                    time.sleep(delay)
+            time.sleep(delay)
+
+        # Close active cursors when exiting the loop
+        cur.close()
 
     except Exception as e:
-        logging.error(f"Execution engine encountered an unexpected error: {e}")
+        logging.error(f"Execution engine encountered an unexpected runtime error: {e}")
     finally:
-        logging.info(
-            f"Engine stopped. Total records ingested during session: {records_count}"
-        )
+        if conn:
+            conn.close()
+        logging.info(f"Engine shut down OK. Total records ingested during session: {records_count}")
 
 
 if __name__ == "__main__":
+    # Manageable runtime argument controls
     parser = argparse.ArgumentParser(
         description="Safe SAP-AWS Data Sync Framework Generation Tool"
     )
@@ -180,7 +159,7 @@ if __name__ == "__main__":
         "--max-records",
         type=int,
         default=100,
-        help="Max transaction count to run before exit (0 for infinite)",
+        help="Max transaction count to run before exit",
     )
     parser.add_argument(
         "--duration",
@@ -196,12 +175,13 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
+    # Launch initialization and run the pipeline job
     init_sap_tables()
     generate_job(max_records=args.max_records, duration=args.duration, delay=args.delay)
 
 
-# Run a quick batch of 50 records only and stop automatically
+# runs a batch of 50 records only and stops:
 # python3 generator.py --max-records 50
 
-# Run for exactly 2 min and then clean shutdown
+# runs for 2 min and then clean shutdown:
 # python3 generator.py --max-records 0 --duration 120
