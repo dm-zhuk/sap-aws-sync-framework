@@ -1,6 +1,4 @@
-# ==============================================================================
 # 1. DATABASE SCHEMA DEFINITIONS (DDL)
-# ==============================================================================
 # This tuple holds the raw SQL commands used to build the structural tables.
 # Ensures the local PostgreSQL database matches core SAP structures.
 
@@ -26,9 +24,7 @@ DDL_COMMANDS = (
     """
 )
 
-# ==============================================================================
-# 2. MOCK SAP DATA FACTORY
-# ==============================================================================
+# 2. MOCK SAP data factory
 def generate_sap_records(fake):
     """
     Generates a single, synchronized set of mock records for MARA and VBAK.
