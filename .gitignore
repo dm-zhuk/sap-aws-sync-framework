@@ -23,7 +23,7 @@ metastore_db/
 
 # --- Terraform ---
 .terraform/
-*.tfstate
+*.tfstate*
 *.tfstate.backup
 
 # --- OS / IDE ---
