@@ -181,7 +181,7 @@ if __name__ == "__main__":
 
 
 # runs a batch of 50 records only and stops:
-# python3 generator.py --max-records 50
+# python3 src/generator.py --max-records 50
 
 # runs for 2 min and then clean shutdown:
-# python3 generator.py --max-records 0 --duration 120
+# python3 src/generator.py --max-records 0 --duration 120

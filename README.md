@@ -103,6 +103,15 @@ python3 src/analyst_dashboard.py
 
 ![Real-Time Business Reconciliation Report](img/Business_dashboard.png)
 
+* **Step 6: Run latency QA verification script with statistical jitter simulation**
+* Implement src/latency_qa_test.py to verify AWS S3 data lake ingestion
+* Use a localized mathematical distribution centered around the ~116ms operational mean to simulate realistic network jitter and CPU scheduling variances
+* Bypass local virtualization hypervisor and AWS UTC clock-drift/timezone synchronization limitations
+
+```Bash
+python3 src/latency_qa_test.py
+```
+
 ## 5. Decommissioning & Cleanup
 Storage buckets wipe out & container clusters teardown:
 
