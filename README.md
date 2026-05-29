@@ -129,6 +129,8 @@ To run the Quality Assurance performance validation loop and verify compliance a
 python3 src/latency_qa_test.py
 ```
 
+![Verification of AWS S3 data lake ingestion](img/Latency_QA_Test_2026-05-28_23.11.28.png)
+
 ## 5. Decommissioning & cleanup
 Storage buckets wipe out & container clusters teardown:
 
