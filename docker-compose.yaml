@@ -2,6 +2,8 @@ services:
   sap-db:
     image: postgres:15.5-alpine
     container_name: sap-db
+    volumes:
+      - ./erp-simulation-engine/sql-init:/docker-entrypoint-initdb.d/
     environment:
       POSTGRES_USER: ${SAP_DB_USER}
       POSTGRES_PASSWORD: ${SAP_DB_PASSWORD}

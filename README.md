@@ -13,21 +13,25 @@ An asynchronous, application-level Change Data Capture (CDC) emulation framework
 ## 2. Repository structure
 
 ```text
+├── LICENSE
 ├── README.md                   # System operational manual
-├── docker-compose.yaml         # Container topology (Postgres, Kafka, Zookeeper, Adminer)
-├── requirements.txt            # Host Python virtual environment dependencies
-├── .env.example                # Template configuration file for credentials
-├── src
+├── docker-compose.yaml         # Quick-start orchestration
+├── requirements.txt            # Global dependencies
+├── analytics-dashboard/        # Presentation layer (UI)
+│   └── analyst_dashboard.py    # Verification of AWS S3 data lake ingestion
+├── aws-infrastructure/         # Terraform Cloud landing zone
+│   ├── main.tf                 # Declarative AWS S3 state configuration and import logic
+    ├── variables.tf            # Terraform input variables configuration
+    └── outputs.tf              # Terraform deployment output parameters
+├── benchmarks/                 # Testing layer
+│   └── latency_qa_test.py      # Verification of AWS S3 data lake ingestion
+├── erp-simulation-engine/      # SAP Digital Twin definitions
+│   └── sql-init/               # Automation: MARA/VBAK init scripts
+└── ingestion-pipeline/         # CDC and Kafka microservices
 │   ├── generator.py            # Transactional database simulator & event producer
 │   ├── kafka_streamer.py       # Core Kafka event dispatch utility thread
 │   ├── schemas.py              # DDL schema definitions and mock data factory
 │   ├── streaming_job.py        # Cloud-native ingestion worker (Kafka consumer -> AWS S3)
-│   ├── analyst_dashboard.py    # Unified ledger report compiler for business analysts
-│   └── latency_qa_test.py      # Verification of AWS S3 data lake ingestion
-└── terraform
-    ├── main.tf                 # Declarative AWS S3 state configuration and import logic
-    ├── variables.tf            # Terraform input variables configuration
-    └── outputs.tf              # Terraform deployment output parameters
 ```
 
 ## 3. Environment configuration (`.env`)
@@ -95,10 +99,10 @@ Open a dedicated terminal window, navigate to the project folder, and execute th
 
 ```Bash
 source venv/bin/activate
-python3 src/streaming_job.py
+python3 ingestion-pipeline/streaming_job.py
 ```
 
-![Cloud Ingestion Forwarder](img/SAP_CDC_dual_write_framework_exec_20260526.png)
+![Cloud Ingestion Forwarder](img/sap_cdc_dual_write_framework_exec_20260526.png)
 
 * **Step 4: Run the transaction generation engine**
 
@@ -106,30 +110,30 @@ Open a second terminal window and execute the data simulation script - 50-record
 
 ```Bash
 source venv/bin/activate
-python3 src/generator.py --max-records 50
+python3 ingestion-pipeline/generator.py --max-records 50
 ```
 
-![Transaction Generation Engine](img/SAP_simulation_data_20260526.png)
+![Transaction Generation Engine](img/sap_simulation_data_20260526.png)
 
 * **Step 5: Execute the real-time Business reconciliation report**
 
 To verify that data has safely crossed the network boundary and stands structured for business recon, execute the analyst report compiler:
 
 ```Bash
-python3 src/analyst_dashboard.py
+python3 analytics-dashboard/analyst_dashboard.py
 ```
 
-![Real-Time Business Reconciliation Report](img/Business_dashboard.png)
+![Real-Time Business Reconciliation Report](img/business_dashboard.png)
 
 * **Step 6: Execute the empirical pipeline latency verification audit**
 
 To run the Quality Assurance performance validation loop and verify compliance against sub-second ingestion bounds, execute the benchmarking utility:
 
 ```Bash
-python3 src/latency_qa_test.py
+python3 benchmarks/latency_qa_test.py
 ```
 
-![Verification of AWS S3 data lake ingestion](img/Latency_QA_Test_2026-05-28_23.11.28.png)
+![Verification of AWS S3 data lake ingestion](img/latency_qa_test_2026-05-28_23.11.28.png)
 
 ## 5. Decommissioning & cleanup
 Storage buckets wipe out & container clusters teardown:
